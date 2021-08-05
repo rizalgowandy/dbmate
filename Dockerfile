@@ -1,7 +1,7 @@
 # development image
-FROM techknowlogick/xgo:go-1.16.x as dev
+FROM golang:1.16 as dev
 WORKDIR /src
-ENV GOCACHE /src/.cache/go-build
+ENV GOCACHE /src/.cache/go
 
 # enable cgo to build sqlite
 ENV CGO_ENABLED 1
@@ -10,7 +10,7 @@ ENV CGO_ENABLED 1
 RUN apt-get update \
 	&& apt-get install -qq --no-install-recommends \
 		curl \
-		mysql-client \
+		mariadb-client \
 		postgresql-client \
 		sqlite3 \
 	&& rm -rf /var/lib/apt/lists/*
