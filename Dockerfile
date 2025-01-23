@@ -1,42 +1,38 @@
-# development image
-FROM techknowlogick/xgo:go-1.16.x as dev
+# development stage
+FROM golang:1.23.5 as dev
 WORKDIR /src
-ENV GOCACHE /src/.cache/go-build
+ENV PATH="/src/typescript/node_modules/.bin:${PATH}"
+RUN git config --global --add safe.directory /src
 
-# enable cgo to build sqlite
-ENV CGO_ENABLED 1
-
-# install database clients
+# install development tools
 RUN apt-get update \
-	&& apt-get install -qq --no-install-recommends \
-		curl \
-		mysql-client \
-		postgresql-client \
-		sqlite3 \
-	&& rm -rf /var/lib/apt/lists/*
+  && apt-get install -qq --no-install-recommends \
+    curl \
+    file \
+    mariadb-client \
+    postgresql-client \
+    sqlite3 \
+    nodejs \
+    npm \
+  && rm -rf /var/lib/apt/lists/*
 
 # golangci-lint
 RUN curl -fsSL https://raw.githubusercontent.com/golangci/golangci-lint/master/install.sh \
-	| sh -s -- -b /usr/local/bin v1.39.0
+  | sh -s -- -b /usr/local/bin v1.63.4
 
 # download modules
-COPY go.* ./
+COPY go.* /src/
 RUN go mod download
-
-ENTRYPOINT []
-CMD ["/bin/bash"]
-
-# build stage
-FROM dev as build
-COPY . ./
+COPY . /src/
 RUN make build
 
 # release stage
-FROM alpine as release
+FROM alpine:3.21.2 as release
 RUN apk add --no-cache \
-	mariadb-client \
-	postgresql-client \
-	sqlite \
-	tzdata
-COPY --from=build /src/dist/dbmate-linux-amd64 /usr/local/bin/dbmate
-ENTRYPOINT ["dbmate"]
+  mariadb-client \
+  mariadb-connector-c \
+  postgresql-client \
+  sqlite \
+  tzdata
+COPY --from=dev /src/dist/dbmate /usr/local/bin/dbmate
+ENTRYPOINT ["/usr/local/bin/dbmate"]

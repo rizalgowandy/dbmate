@@ -1,3 +1,4 @@
+//go:build cgo
 // +build cgo
 
 package sqlite
@@ -12,8 +13,8 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/amacneil/dbmate/pkg/dbmate"
-	"github.com/amacneil/dbmate/pkg/dbutil"
+	"github.com/amacneil/dbmate/v2/pkg/dbmate"
+	"github.com/amacneil/dbmate/v2/pkg/dbutil"
 
 	"github.com/lib/pq"
 	_ "github.com/mattn/go-sqlite3" // database/sql driver
@@ -45,6 +46,23 @@ func ConnectionString(u *url.URL) string {
 	// duplicate URL and remove scheme
 	newURL := *u
 	newURL.Scheme = ""
+
+	if newURL.Opaque == "" && newURL.Path != "" {
+		// When the DSN is in the form "scheme:/absolute/path" or
+		// "scheme://absolute/path" or "scheme:///absolute/path", url.Parse
+		// will consider the file path as :
+		// - "absolute" as the hostname
+		// - "path" (and the rest until "?") as the URL path.
+		// Instead, when the DSN is in the form "scheme:", the (relative) file
+		// path is stored in the "Opaque" field.
+		// See: https://pkg.go.dev/net/url#URL
+		//
+		// While Opaque is not escaped, the URL Path is. So, if .Path contains
+		// the file path, we need to un-escape it, and rebuild the full path.
+
+		newURL.Opaque = "//" + newURL.Host + dbutil.MustUnescapePath(newURL.Path)
+		newURL.Path = ""
+	}
 
 	// trim duplicate leading slashes
 	str := regexp.MustCompile("^//+").ReplaceAllString(newURL.String(), "/")
@@ -113,7 +131,7 @@ func (drv *Driver) schemaMigrationsDump(db *sql.DB) ([]byte, error) {
 // DumpSchema returns the current database schema
 func (drv *Driver) DumpSchema(db *sql.DB) ([]byte, error) {
 	path := ConnectionString(drv.databaseURL)
-	schema, err := dbutil.RunCommand("sqlite3", path, ".schema")
+	schema, err := dbutil.RunCommand("sqlite3", path, ".schema --nosys")
 	if err != nil {
 		return nil, err
 	}
@@ -140,11 +158,25 @@ func (drv *Driver) DatabaseExists() (bool, error) {
 	return true, nil
 }
 
+// MigrationsTableExists checks if the schema_migrations table exists
+func (drv *Driver) MigrationsTableExists(db *sql.DB) (bool, error) {
+	exists := false
+	err := db.QueryRow("SELECT 1 FROM sqlite_master "+
+		"WHERE type='table' AND name=$1",
+		drv.migrationsTableName).
+		Scan(&exists)
+	if err == sql.ErrNoRows {
+		return false, nil
+	}
+
+	return exists, err
+}
+
 // CreateMigrationsTable creates the schema migrations table
 func (drv *Driver) CreateMigrationsTable(db *sql.DB) error {
-	_, err := db.Exec(
-		fmt.Sprintf("create table if not exists %s ", drv.quotedMigrationsTableName()) +
-			"(version varchar(255) primary key)")
+	_, err := db.Exec(fmt.Sprintf(
+		"create table if not exists %s (version varchar(128) primary key)",
+		drv.quotedMigrationsTableName()))
 
 	return err
 }
@@ -209,6 +241,11 @@ func (drv *Driver) Ping() error {
 	defer dbutil.MustClose(db)
 
 	return db.Ping()
+}
+
+// Return a normalized version of the driver-specific error type.
+func (drv *Driver) QueryError(query string, err error) error {
+	return &dbmate.QueryError{Err: err, Query: query}
 }
 
 func (drv *Driver) quotedMigrationsTableName() string {
